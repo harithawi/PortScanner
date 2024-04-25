@@ -1,0 +1,206 @@
+#!/usr/bin/python3
+import os
+import time
+import random
+from scapy.all import *
+import subprocess as sb
+from optparse import OptionParser
+
+parser = OptionParser()
+parser.add_option("-i","--ip",dest="ip",help="IP of the target host.")
+parser.add_option("-p","--port",dest="port",help="Port \nEg:- p1-pn or p1,p2,pn or p")
+parser.add_option("-t","--time",dest="time", help="Time stamp (only available : 1sec to 4sec)")
+parser.add_option("-d","--decoy ", dest="decoy", help="Randomize Source IP \nEg:- 1,n (select the amount of ip that you want to use as decoy)")
+parser.add_option("-e","--iface",dest="iface", help="Interface name")
+parser.add_option("-o","--out",dest="out", help="Save output to a file")
+
+(options,args) = parser.parse_args()
+	
+def halfTCPScan(dstIP,dstPort):
+	isTrue = False
+	srcPort = random.randint(49152, 65535)
+	conf.verb = 0
+	seq_number = random.randint(0, 0xFFFFFFFF)
+	segment = IP(dst=dstIP)/TCP(sport=srcPort,dport=dstPort, seq=seq_number)
+	answered, unanswered = sr(segment, timeout=2)
+	if answered:
+		try:
+			reply = answered[0][1]
+			segment=IP(dst=dstIP)/TCP(sport=srcPort,dport=dstPort,flags='R',seq=reply[TCP].ack)
+			send(segment)
+			isTrue = True
+
+		except IndexError:
+			pass 
+	return isTrue
+
+def getInterfaceIP(iface):
+	p = sb.Popen(f"ip addr | grep {iface} | awk 'NR==2'",shell=True,stdout=sb.PIPE)
+	out = p.stdout.read().decode()
+	ip = ""
+	if out:
+		ip = out.split()[1][:-3]
+	return ip	
+
+def decoyScan(dstIP, dstPort,iface,decoy):
+	ipList = []
+	ifaceIP = getInterfaceIP(iface)	
+	
+	if ifaceIP.strip() != "":
+		if not ":" in ifaceIP:
+			isTrue = False
+			for i in range(int(decoy)):
+				ipList.append(str(RandIP()))
+			ipList.append(ifaceIP)
+			
+			for i in ipList:
+				srcPort = random.randint(49152, 65535)
+				conf.verb = 0
+				seq_number = random.randint(0, 0xFFFFFFFF)
+				segment = IP(src=i,dst=dstIP)/TCP(sport=srcPort,dport=dstPort, seq=seq_number)
+				
+				if i == ifaceIP:
+					try:
+						answered, unanswered = sr(segment, timeout=2)	
+						reply = answered[0][1]
+						if reply[TCP].flags == 0x012 or reply[TCP].flags == 0x014:
+							isTrue = True
+
+					except IndexError:
+						pass
+				else:
+					send(segment)
+		else:
+			print(f"[-] No such a network interface: {iface}")
+			exit()
+	else:
+		print(f"[-] No such a network interface: {iface}")
+		exit()
+	
+	return isTrue
+
+def writeToFile(fname,data):
+	with open(fname , "a") as f:
+		data = f"{data}\n"
+		f.write(data)
+
+def checkScan(dstIP,dstPort,iface,decoy):
+	if decoy and int(decoy) > 0 and iface:
+		if decoyScan(dstIP,dstPort,iface,int(decoy)):
+			data = f"[+] Open : {dstPort}"
+			if options.out:
+				writeToFile(options.out,data)
+				print(data)
+			else:
+				print(data)
+		elif decoy:
+				if not iface:
+					print("[-] Interface should be mentioned with the switch -e ")
+	else:
+		if halfTCPScan(dstIP,dstPort):
+			data = f"[+] Open : {dstPort}"	
+			if options.out:
+				writeToFile(options.out,data)
+				print(data)
+			else:
+				print(data)
+
+if  os.getuid() == 0:
+	try:
+		if(options.ip and options.port):
+			dstIP = options.ip
+			dstPort = options.port
+			iface = options.iface
+			decoy = options.decoy
+			timestamp = 0
+			common_ports = [21,22,23,25,53,67,69,80,110,123,143,161,389,443,445,993,995,3306,3389,5432]
+			
+			if options.time:
+				try:
+					timestamp = int(options.time)
+				except:
+					print("[-] Time stamp must be an integer that scales 1 to 4sec")
+		 
+			try:
+				if options.out:
+					writeToFile(options.out,f"[+] Scan report of {dstIP}\n")
+
+				if options.decoy:
+					print(f"[*] Decoy scan is started on {dstIP}\n[*] Target ports: {dstPort}\n")
+				else:
+					print(f"[*] Half TCP scan is started on {dstIP}\n[*] Target ports: {dstPort}\n")
+
+				if "-" in dstPort:
+					portRange = dstPort.split("-")
+					for i in range(int(portRange[0]),int(portRange[1])):
+						checkScan(dstIP,i,iface,decoy)
+						time.sleep(timestamp)
+			
+				elif "," in dstPort:
+					for i in dstPort.split(","):
+						checkScan(dstIP,int(i),iface,decoy)
+						time.sleep(timestamp)
+				elif dstPort.endswith(".txt"):
+					protList = []
+					try:
+						with open(dstPort,"r") as f:
+							portList = f.read().splitlines()
+
+						for i in portList:
+							checkScan(dstIP, int(i), iface, decoy)
+							time.sleep(timestamp)
+					except FileNotFoundError:
+						print("[-] Check the file name again.\n")
+						exit()
+
+				elif dstPort.upper() == "COMMON":
+					for i in common_ports:
+						checkScan(dstIP, int(i), iface, decoy)
+						time.sleep(timestamp)
+				else:
+					if options.decoy and int(options.decoy) > 0 and iface:
+						if decoyScan(dstIP,int(dstPort),iface,decoy):
+							data = f"[+] Open : {dstPort}"
+							if options.out:
+								writeToFile(options.out,data)
+								print(data)
+							else:
+								print(data)
+						else:
+							data = f"[-] Closed : {dstPort}"
+							if options.out:
+								writeToFile(options.out,data)
+								print(data)
+							else:
+								print(data)
+
+					elif options.decoy:
+							if not options.iface:
+								print("[*] Interface should be mentioned with the switch -e ")
+						
+					else:
+						if halfTCPScan(dstIP,int(dstPort)):
+							data = f"[+] Open : {dstPort}"
+							if options.out:
+								writeToFile(options.out,data)
+								print(data)
+							else:
+								print(data)
+						else:
+							data = f"[-] Closed : {dstPort}"
+							if options.out:
+								writeToFile(options.out,data)
+								print(data)
+							else:
+								print(data)
+			
+
+			except ValueError as e:
+					print(f"Port number must be an integer.")
+		else:
+			parser.print_help()
+
+	except KeyboardInterrupt:
+		print("[-] User cancelled the process.\n")
+else:
+	print("[-] Run the script with root privilage.")
