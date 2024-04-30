@@ -20,23 +20,23 @@ parser.add_option("-o","--out",dest="out", help="Save output to a file")
 
 (options,args) = parser.parse_args()
 	
-def halfTCPScan(dstIP,dstPort):
-	isTrue = False
-	srcPort = random.randint(49152, 65535)
-	conf.verb = 0
-	seq_number = random.randint(0, 0xFFFFFFFF)
-	segment = IP(dst=dstIP)/TCP(sport=srcPort,dport=dstPort, seq=seq_number)
-	answered, unanswered = sr(segment, timeout=2)
-	if answered:
-		try:
-			reply = answered[0][1]
-			segment=IP(dst=dstIP)/TCP(sport=srcPort,dport=dstPort,flags='R',seq=reply[TCP].ack)
-			send(segment)
-			isTrue = True
+def halfTCPScan(dstIP, dstPort):
+    isTrue = False
+    srcPort = random.randint(49152, 65535)
+    conf.verb = 0
+    seq_number = random.randint(0, 0xFFFFFFFF)
+    segment = IP(dst=dstIP)/TCP(sport=srcPort, dport=dstPort, seq=seq_number)
+    try:
+        answered, unanswered = sr(segment, timeout=2) 
+        reply = answered[0][1]
+        if reply[TCP].flags == 0x012:  
+            segment = IP(dst=dstIP)/TCP(sport=srcPort, dport=dstPort, flags='R', seq=reply[TCP].ack)
+            send(segment)
+            isTrue = True
 
-		except IndexError:
-			pass 
-	return isTrue
+    except IndexError:
+        pass
+    return isTrue
 
 def getInterfaceIP(iface):
 	p = sb.Popen(f"ip addr | grep {iface} | awk 'NR==2'",shell=True,stdout=sb.PIPE)
